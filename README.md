@@ -11,6 +11,14 @@ Create ```data_results directory before initializing code```
 ```sudo python3 tbatch.py --network lastfm```
 
 
+## MATRIX.PY
+To activate confusion matrix simply pass correct or modified data files to the code and run it:
+```sudo python3 matrix.py <first_data_file> <second_data_file>```
+
+## COLLECT.PY
+Collect.py collects all model run times and prints them out. Modify file directories in code as needed.
+
+
 ## Predicting Dynamic Embedding Trajectory in Temporal Interaction Networks (ACM SIGKDD 2019)
 #### Authors: [Srijan Kumar](http://cs.stanford.edu/~srijan), [Xikun Zhang](), [Jure Leskovec](https://cs.stanford.edu/people/jure/)
 <!--#### [Project website with links to the datasets](http://snap.stanford.edu/jodie/)-->
