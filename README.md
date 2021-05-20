@@ -1,5 +1,5 @@
 ## NOTE
-Create ```data_results``` directory before initializing code
+Create ```data_results directory before initializing code```
 
 ## WORKFLOW USED
 ```sudo python3 jodie.py --network lastfm --model jodie --epochs 1
