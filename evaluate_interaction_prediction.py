@@ -35,8 +35,18 @@ args.gpu = select_free_gpu()
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
 
+#----------
+pre_data_result_fn = "data_results/pre_interaction_prediction_%s.txt" % args.network
+fileOutPre = open(pre_data_result_fn, "w")
+fileOutPre.write("user_id,item_id,timestamp,state_label,comma_separated_list_of_features\n")
+
+post_data_result_fn = "data_results/post_interaction_prediction_%s.txt" % args.network
+fileOutPost = open(post_data_result_fn, "w")
+fileOutPost.write("user_id,item_id,timestamp,state_label,comma_separated_list_of_features\n")
+#----------
+
 # CHECK IF THE OUTPUT OF THE EPOCH IS ALREADY PROCESSED. IF SO, MOVE ON.
-output_fname = "results/interaction_prediction_%s.txt" % args.network
+output_fname = "results/interaction_prediction_%s.csv" % args.network
 if os.path.exists(output_fname):
     f = open(output_fname, "r")
     search_string = 'Test performance of epoch %d' % args.epoch
@@ -73,7 +83,7 @@ Longer timespans mean more interactions are processed and the training time is r
 At the end of each timespan, the model is updated as well. So, longer timespan means less frequent model updates. 
 '''
 timespan = timestamp_sequence[-1] - timestamp_sequence[0]
-tbatch_timespan = timespan / 500 
+tbatch_timespan = timespan / 500
 
 # INITIALIZE MODEL PARAMETERS
 model = JODIE(args, num_features, num_users, num_items).cuda()
@@ -91,7 +101,7 @@ if train_end_idx != train_end_idx_training:
     sys.exit('Training proportion during training and testing are different. Aborting.')
 
 # SET THE USER AND ITEM EMBEDDINGS TO THEIR STATE AT THE END OF THE TRAINING PERIOD
-set_embeddings_training_end(user_embeddings_dystat, item_embeddings_dystat, user_embeddings_timeseries, item_embeddings_timeseries, user_sequence_id, item_sequence_id, train_end_idx) 
+set_embeddings_training_end(user_embeddings_dystat, item_embeddings_dystat, user_embeddings_timeseries, item_embeddings_timeseries, user_sequence_id, item_sequence_id, train_end_idx)
 
 # LOAD THE EMBEDDINGS: DYNAMIC AND STATIC
 item_embeddings = item_embeddings_dystat[:, :args.embedding_dim]
@@ -147,6 +157,11 @@ with trange(train_end_idx, test_end_idx) as progress_bar:
         item_timediffs_tensor = Variable(torch.Tensor([item_timediff]).cuda()).unsqueeze(0)
         item_embedding_previous = item_embeddings[torch.cuda.LongTensor([itemid_previous])]
 
+        #---------------------
+        arr = map(str, [item_embedding_input, user_embedding_input, user_timediffs_tensor, item_timediffs_tensor])
+        fileOutPre.write(",".join(arr) + "\n")
+        #---------------------
+
         # PROJECT USER EMBEDDING
         user_projected_embedding = model.forward(user_embedding_input, item_embedding_previous, timediffs=user_timediffs_tensor, features=feature_tensor, select='project')
         user_item_embedding = torch.cat([user_projected_embedding, item_embedding_previous, item_embeddings_static[torch.cuda.LongTensor([itemid_previous])], user_embedding_static_input], dim=1)
@@ -156,10 +171,10 @@ with trange(train_end_idx, test_end_idx) as progress_bar:
 
         # CALCULATE PREDICTION LOSS
         loss += MSELoss(predicted_item_embedding, torch.cat([item_embedding_input, item_embedding_static_input], dim=1).detach())
-        
-        # CALCULATE DISTANCE OF PREDICTED ITEM EMBEDDING TO ALL ITEMS 
-        euclidean_distances = nn.PairwiseDistance()(predicted_item_embedding.repeat(num_items, 1), torch.cat([item_embeddings, item_embeddings_static], dim=1)).squeeze(-1) 
-        
+
+        # CALCULATE DISTANCE OF PREDICTED ITEM EMBEDDING TO ALL ITEMS
+        euclidean_distances = nn.PairwiseDistance()(predicted_item_embedding.repeat(num_items, 1), torch.cat([item_embeddings, item_embeddings_static], dim=1)).squeeze(-1)
+
         # CALCULATE RANK OF THE TRUE ITEM AMONG ALL ITEMS
         true_item_distance = euclidean_distances[itemid]
         euclidean_distances_smaller = (euclidean_distances < true_item_distance).data.cpu().numpy()
@@ -171,14 +186,19 @@ with trange(train_end_idx, test_end_idx) as progress_bar:
             test_ranks.append(true_item_rank)
 
         # UPDATE USER AND ITEM EMBEDDING
-        user_embedding_output = model.forward(user_embedding_input, item_embedding_input, timediffs=user_timediffs_tensor, features=feature_tensor, select='user_update') 
-        item_embedding_output = model.forward(user_embedding_input, item_embedding_input, timediffs=item_timediffs_tensor, features=feature_tensor, select='item_update') 
+        user_embedding_output = model.forward(user_embedding_input, item_embedding_input, timediffs=user_timediffs_tensor, features=feature_tensor, select='user_update')
+        item_embedding_output = model.forward(user_embedding_input, item_embedding_input, timediffs=item_timediffs_tensor, features=feature_tensor, select='item_update')
 
         # SAVE EMBEDDINGS
-        item_embeddings[itemid,:] = item_embedding_output.squeeze(0) 
-        user_embeddings[userid,:] = user_embedding_output.squeeze(0) 
+        item_embeddings[itemid,:] = item_embedding_output.squeeze(0)
+        user_embeddings[userid,:] = user_embedding_output.squeeze(0)
         user_embeddings_timeseries[j, :] = user_embedding_output.squeeze(0)
         item_embeddings_timeseries[j, :] = item_embedding_output.squeeze(0)
+
+        #---------------------
+        arr = map(str, [item_embeddings[itemid,:], user_embeddings[userid,:], user_embeddings_timeseries[j, :], item_embeddings_timeseries[j, :]])
+        fileOutPost.write(",".join(arr) + "\n")
+        #---------------------
 
         # CALCULATE LOSS TO MAINTAIN TEMPORAL SMOOTHNESS
         loss += MSELoss(item_embedding_output, item_embedding_input.detach())
@@ -186,7 +206,7 @@ with trange(train_end_idx, test_end_idx) as progress_bar:
 
         # CALCULATE STATE CHANGE LOSS
         if args.state_change:
-            loss += calculate_state_prediction_loss(model, [j], user_embeddings_timeseries, y_true, crossEntropyLoss) 
+            loss += calculate_state_prediction_loss(model, [j], user_embeddings_timeseries, y_true, crossEntropyLoss)
 
         # UPDATE THE MODEL IN REAL-TIME USING ERRORS MADE IN THE PAST PREDICTION
         if timestamp - tbatch_start_time > tbatch_timespan:
@@ -194,14 +214,14 @@ with trange(train_end_idx, test_end_idx) as progress_bar:
             loss.backward()
             optimizer.step()
             optimizer.zero_grad()
-            
+
             # RESET LOSS FOR NEXT T-BATCH
             loss = 0
             item_embeddings.detach_()
             user_embeddings.detach_()
-            item_embeddings_timeseries.detach_() 
+            item_embeddings_timeseries.detach_()
             user_embeddings_timeseries.detach_()
-            
+
 # CALCULATE THE PERFORMANCE METRICS
 performance_dict = dict()
 ranks = validation_ranks
@@ -220,15 +240,17 @@ metrics = ['Mean Reciprocal Rank', 'Recall@10']
 
 print('\n\n*** Validation performance of epoch %d ***' % args.epoch)
 fw.write('\n\n*** Validation performance of epoch %d ***\n' % args.epoch)
-for i in xrange(len(metrics)):
+for i in range(len(metrics)):
     print(metrics[i] + ': ' + str(performance_dict['validation'][i]))
     fw.write("Validation: " + metrics[i] + ': ' + str(performance_dict['validation'][i]) + "\n")
-    
+
 print('\n\n*** Test performance of epoch %d ***' % args.epoch)
 fw.write('\n\n*** Test performance of epoch %d ***\n' % args.epoch)
-for i in xrange(len(metrics)):
+for i in range(len(metrics)):
     print(metrics[i] + ': ' + str(performance_dict['test'][i]))
     fw.write("Test: " + metrics[i] + ': ' + str(performance_dict['test'][i]) + "\n")
 
+fileOutPost.close()
+fileOutPre.close()
 fw.flush()
 fw.close()

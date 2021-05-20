@@ -35,19 +35,28 @@ if args.gpu == -1:
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
 
+
+#----------
+post_data_result_fn = "data_results/post_predicted_item_embedding_%s.txt" % args.network
+fileOutPost = open(post_data_result_fn, "w")
+
+pre_data_result_fn = "data_results/pre_predicted_item_embedding_%s.txt" % args.network
+fileOutPre = open(pre_data_result_fn, "w")
+#----------
+
 # LOAD DATA
 [user2id, user_sequence_id, user_timediffs_sequence, user_previous_itemid_sequence,
- item2id, item_sequence_id, item_timediffs_sequence, 
+ item2id, item_sequence_id, item_timediffs_sequence,
  timestamp_sequence, feature_sequence, y_true] = load_network(args)
 num_interactions = len(user_sequence_id)
-num_users = len(user2id) 
+num_users = len(user2id)
 num_items = len(item2id) + 1 # one extra item for "none-of-these"
 num_features = len(feature_sequence[0])
-true_labels_ratio = len(y_true)/(1.0+sum(y_true)) # +1 in denominator in case there are no state change labels, which will throw an error. 
+true_labels_ratio = len(y_true)/(1.0+sum(y_true)) # +1 in denominator in case there are no state change labels, which will throw an error.
 print("*** Network statistics:\n  %d users\n  %d items\n  %d interactions\n  %d/%d true labels ***\n\n" % (num_users, num_items, num_interactions, sum(y_true), len(y_true)))
 
 # SET TRAINING, VALIDATION, TESTING, and TBATCH BOUNDARIES
-train_end_idx = validation_start_idx = int(num_interactions * args.train_proportion) 
+train_end_idx = validation_start_idx = int(num_interactions * args.train_proportion)
 test_start_idx = int(num_interactions * (args.train_proportion+0.1))
 test_end_idx = int(num_interactions * (args.train_proportion+0.2))
 
@@ -60,7 +69,7 @@ Longer timespans mean more interactions are processed and the training time is r
 Longer timespan leads to less frequent model updates. 
 '''
 timespan = timestamp_sequence[-1] - timestamp_sequence[0]
-tbatch_timespan = timespan / 500 
+tbatch_timespan = timespan / 500
 
 # INITIALIZE MODEL AND PARAMETERS
 model = JODIE(args, num_features, num_users, num_items).cuda()
@@ -74,10 +83,16 @@ initial_item_embedding = nn.Parameter(F.normalize(torch.rand(args.embedding_dim)
 model.initial_user_embedding = initial_user_embedding
 model.initial_item_embedding = initial_item_embedding
 
-user_embeddings = initial_user_embedding.repeat(num_users, 1) # initialize all users to the same embedding 
+user_embeddings = initial_user_embedding.repeat(num_users, 1) # initialize all users to the same embedding
 item_embeddings = initial_item_embedding.repeat(num_items, 1) # initialize all items to the same embedding
 item_embedding_static = Variable(torch.eye(num_items).cuda()) # one-hot vectors for static embeddings
-user_embedding_static = Variable(torch.eye(num_users).cuda()) # one-hot vectors for static embeddings 
+user_embedding_static = Variable(torch.eye(num_users).cuda()) # one-hot vectors for static embeddings
+
+# #---------------------
+arr = map(str, [initial_item_embedding])
+fileOutPre.write(",".join(arr) + "\n")
+# #---------------------
+
 
 # INITIALIZE MODEL
 learning_rate = 1e-3
@@ -164,7 +179,7 @@ with trange(args.epochs) as progress_bar1:
                     with trange(len(lib.current_tbatches_user)) as progress_bar3:
                         for i in progress_bar3:
                             progress_bar3.set_description('Processed %d of %d T-batches ' % (i, len(lib.current_tbatches_user)))
-                            
+
                             total_interaction_count += len(lib.current_tbatches_interactionids[i])
 
                             # LOAD THE CURRENT TBATCH
@@ -192,7 +207,7 @@ with trange(args.epochs) as progress_bar1:
                             user_projected_embedding = model.forward(user_embedding_input, item_embedding_previous, timediffs=user_timediffs_tensor, features=feature_tensor, select='project')
                             user_item_embedding = torch.cat([user_projected_embedding, item_embedding_previous, item_embedding_static[tbatch_itemids_previous,:], user_embedding_static[tbatch_userids,:]], dim=1)
 
-                            # PREDICT NEXT ITEM EMBEDDING                            
+                            # PREDICT NEXT ITEM EMBEDDING
                             predicted_item_embedding = model.predict_item_embedding(user_item_embedding)
 
                             # CALCULATE PREDICTION LOSS
@@ -204,10 +219,15 @@ with trange(args.epochs) as progress_bar1:
                             item_embedding_output = model.forward(user_embedding_input, item_embedding_input, timediffs=item_timediffs_tensor, features=feature_tensor, select='item_update')
 
                             item_embeddings[tbatch_itemids,:] = item_embedding_output
-                            user_embeddings[tbatch_userids,:] = user_embedding_output  
+                            user_embeddings[tbatch_userids,:] = user_embedding_output
 
                             user_embeddings_timeseries[tbatch_interactionids,:] = user_embedding_output
                             item_embeddings_timeseries[tbatch_interactionids,:] = item_embedding_output
+
+                            #---------------------
+                            arr = map(str, [predicted_item_embedding])
+                            fileOutPost.write(",".join(arr) + "\n")
+                            #---------------------
 
                             # CALCULATE LOSS TO MAINTAIN TEMPORAL SMOOTHNESS
                             loss += MSELoss(item_embedding_output, item_embedding_input.detach())
@@ -215,7 +235,7 @@ with trange(args.epochs) as progress_bar1:
 
                             # CALCULATE STATE CHANGE LOSS
                             if args.state_change:
-                                loss += calculate_state_prediction_loss(model, tbatch_interactionids, user_embeddings_timeseries, y_true, crossEntropyLoss) 
+                                loss += calculate_state_prediction_loss(model, tbatch_interactionids, user_embeddings_timeseries, y_true, crossEntropyLoss)
 
                     # BACKPROPAGATE ERROR AFTER END OF T-BATCH
                     total_loss += loss.item()
@@ -227,9 +247,9 @@ with trange(args.epochs) as progress_bar1:
                     loss = 0
                     item_embeddings.detach_() # Detachment is needed to prevent double propagation of gradient
                     user_embeddings.detach_()
-                    item_embeddings_timeseries.detach_() 
+                    item_embeddings_timeseries.detach_()
                     user_embeddings_timeseries.detach_()
-                   
+
                     # REINITIALIZE
                     if is_first_epoch:
                         cached_tbatches_user[timestamp] = lib.current_tbatches_user
@@ -239,16 +259,38 @@ with trange(args.epochs) as progress_bar1:
                         cached_tbatches_user_timediffs[timestamp] = lib.current_tbatches_user_timediffs
                         cached_tbatches_item_timediffs[timestamp] = lib.current_tbatches_item_timediffs
                         cached_tbatches_previous_item[timestamp] = lib.current_tbatches_previous_item
-                        
+
                         reinitialize_tbatches()
                         tbatch_to_insert = -1
 
+
+
+        #Flushing data to DATA_RESULTS
+        formatted_time = "{:.4f}".format((time.time()-epoch_start_time)/60)
+
+        if is_first_epoch is False:
+            f = open("data_results/" + args.network + ".txt", "a+")
+            f.write("Epoch " + str(ep) + " " + formatted_time + "\n")
+            f.close()
+        else:
+            f = open("data_results/" + args.network + ".txt", "w+")
+            f.write("Epoch 0 " + formatted_time + "\n")
+            f.close()
+
         is_first_epoch = False # as first epoch ends here
         print("Last epoch took {} minutes".format((time.time()-epoch_start_time)/60))
-        # END OF ONE EPOCH 
+
+        # END OF ONE EPOCH
         print("\n\nTotal loss in this epoch = %f" % (total_loss))
         item_embeddings_dystat = torch.cat([item_embeddings, item_embedding_static], dim=1)
         user_embeddings_dystat = torch.cat([user_embeddings, user_embedding_static], dim=1)
+
+
+        #---------------------
+        #arr = map(str, [item_embeddings_dystat, user_embeddings_dystat])
+        #fileOutPre.write(",".join(arr) + "\n")
+        #---------------------
+
         # SAVE CURRENT MODEL TO DISK TO BE USED IN EVALUATION.
         save_model(model, optimizer, args, ep, user_embeddings_dystat, item_embeddings_dystat, train_end_idx, user_embeddings_timeseries, item_embeddings_timeseries)
 
@@ -259,3 +301,5 @@ with trange(args.epochs) as progress_bar1:
 print("\n\n*** Training complete. Saving final model. ***\n\n")
 save_model(model, optimizer, args, ep, user_embeddings_dystat, item_embeddings_dystat, train_end_idx, user_embeddings_timeseries, item_embeddings_timeseries)
 
+fileOutPost.close()
+fileOutPre.close()
