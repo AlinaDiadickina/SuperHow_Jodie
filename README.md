@@ -2,13 +2,13 @@
 Create ```data_results directory before initializing code```
 
 ## WORKFLOW USED
-```sudo python3 jodie.py --network lastfm --model jodie --epochs 1
+```sudo python3 jodie.py --network lastfm --model jodie --epochs 1```
 
-sudo python3 evaluate_interaction_prediction.py --network lastfm --model jodie --epoch 2
+```sudo python3 evaluate_interaction_prediction.py --network lastfm --model jodie --epoch 2```
 
-sudo python3 evaluate_state_change_prediction.py --network lastfm --model jodie --epoch 2
+```sudo python3 evaluate_state_change_prediction.py --network lastfm --model jodie --epoch 2```
 
-sudo python3 tbatch.py --network lastfm```
+```sudo python3 tbatch.py --network lastfm```
 
 
 ## Predicting Dynamic Embedding Trajectory in Temporal Interaction Networks (ACM SIGKDD 2019)
